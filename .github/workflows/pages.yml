@@ -1,0 +1,52 @@
+# GitHub Pages へ静的サイトをデプロイ（ビルド・npm 不要）。
+# セキュリティ方針:
+#  - 公式 actions/* のみ使用（第三者 action は不使用）。サプライチェーン対策として
+#    より厳格にするなら @vN を full commit SHA に固定するとよい。
+#  - permissions は最小限（Pages デプロイに必要なものだけ）。
+#  - Mojang アセット(assets/)は .gitignore 済みで未コミットのため公開されない。
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同時デプロイを防止（進行中はキャンセルしない＝公開の取りこぼし防止）
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  # 依存ゼロの軽い健全性チェック（全 JS/MJS を構文チェック）
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Syntax check (no deps, no build)
+        run: |
+          set -e
+          find src tools -type f \( -name '*.js' -o -name '*.mjs' \) -print0 \
+            | xargs -0 -I{} node --check "{}"
+
+  deploy:
+    needs: check
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+      - id: deployment
+        uses: actions/deploy-pages@v4

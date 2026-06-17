@@ -1,0 +1,7 @@
+# Minecraft 公式アセット（再配布不可・生成物）。tools/fetch_assets.mjs で各自取得する。
+assets/
+
+# OS / エディタ
+.DS_Store
+Thumbs.db
+*.swp
