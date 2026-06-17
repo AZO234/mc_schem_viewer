@@ -151,19 +151,42 @@ const BED_COLORS = new Set(['white','orange','magenta','light_blue','yellow','li
 
 function syntheticModel(base, props) {
   // チェスト類 → 本体＋蓋＋かんぬき（実 entity テクスチャ・box-UV）。かんぬきが facing を向く。
+  // type=left/right はダブルチェストの左右半分（normal_left/right テクスチャ・幅15で継ぎ目側へ拡張）。
   if (base === 'chest' || base === 'trapped_chest' || base === 'ender_chest') {
-    const tex = base === 'ender_chest' ? 'entity/chest/ender'
-              : base === 'trapped_chest' ? 'entity/chest/trapped'
-              : 'entity/chest/normal';
+    const kind = base === 'ender_chest' ? 'ender' : base === 'trapped_chest' ? 'trapped' : 'normal';
+    const type = base === 'ender_chest' ? 'single' : (props.type || 'single');
+    const yRot = FACE_Y_NORTH[props.facing] || 0;
+    // MC の type=left/right と「どちら側の半分か」の対応は実装の想定と逆だったため入れ替え。
+    // 各半分（geometry＋テクスチャ＋錠）は内部整合のまま、割り当てる type だけ交換する。
+    if (type === 'right') {
+      // body x[0,15]（継ぎ目=-x方向）、錠は -x 端（継ぎ目側）
+      const t = `entity/chest/${kind}_left`;
+      return {
+        atlas: [64, 64], textures: { t }, yRot, elements: [
+          ebox(0, 0, 1, 15, 10, 15, 't', 0, 19),
+          ebox(0, 9, 1, 15, 14, 15, 't', 0, 0),
+          ebox(0, 6, 0, 1, 10, 1, 't', 0, 0),
+        ],
+      };
+    }
+    if (type === 'left') {
+      // body x[1,16]（継ぎ目=+x方向）、錠は +x 端（継ぎ目側）
+      const t = `entity/chest/${kind}_right`;
+      return {
+        atlas: [64, 64], textures: { t }, yRot, elements: [
+          ebox(1, 0, 1, 16, 10, 15, 't', 0, 19),
+          ebox(1, 9, 1, 16, 14, 15, 't', 0, 0),
+          ebox(15, 6, 0, 16, 10, 1, 't', 0, 0),
+        ],
+      };
+    }
+    // 単一チェスト
     return {
-      atlas: [64, 64],
-      textures: { t: tex },
-      elements: [
+      atlas: [64, 64], textures: { t: `entity/chest/${kind}` }, yRot, elements: [
         ebox(1, 0, 1, 15, 10, 15, 't', 0, 19),  // 本体 14×10×14
         ebox(1, 9, 1, 15, 14, 15, 't', 0, 0),   // 蓋 14×5×14
         ebox(7, 8, 0, 9, 12, 1, 't', 0, 0),     // かんぬき 2×4×1（北面・鍵穴）
       ],
-      yRot: FACE_Y_NORTH[props.facing] || 0,
     };
   }
   // ベッド → マットレス＋脚（実 entity テクスチャ）。枕/掛け布はテクスチャに含まれる。
@@ -228,8 +251,44 @@ function syntheticModel(base, props) {
 // 半透明/カットアウト判定（カリングと描画モード用）
 const NON_OPAQUE = /glass|leaves|ice|slime|honey|web|cobweb|door|trapdoor|fence|pane|bars|ladder|torch|sapling|flower|grass$|rail|sign|banner|carpet|snow|bed|chest|lantern|chain|vine/;
 
+// テクスチャファイルキー("oak_planks" / "entity/chest/normal") → textures/ 以下のパス
+function texSubPath(file) { return file.includes('/') ? file : `block/${file}`; }
+
+// ローカル assets/<version>/ を fetch で読む provider
+function urlProvider(base) {
+  return {
+    async json(logicalPath) {
+      try { const r = await fetch(`${base}/${logicalPath}.json`); if (r.ok) return await r.json(); } catch {}
+      return null;
+    },
+    async texURL(file) { return `${base}/textures/${texSubPath(file)}.png`; },
+    texURLSync(file) { return `${base}/textures/${texSubPath(file)}.png`; },
+  };
+}
+
+// メモリ上の client.jar(JarReader) から読む provider（blob URL をキャッシュ）
+function jarProvider(jar) {
+  const blobCache = new Map(); // file -> objectURL
+  return {
+    async json(logicalPath) {
+      try { return await jar.inflateJSON(`assets/minecraft/${logicalPath}.json`); } catch { return null; }
+    },
+    async texURL(file) {
+      if (blobCache.has(file)) return blobCache.get(file);
+      let url = null;
+      try {
+        const bytes = await jar.inflate(`assets/minecraft/textures/${texSubPath(file)}.png`);
+        if (bytes) url = URL.createObjectURL(new Blob([bytes], { type: 'image/png' }));
+      } catch {}
+      blobCache.set(file, url);
+      return url;
+    },
+    texURLSync(file) { return blobCache.get(file) || null; },
+  };
+}
+
 export class AssetPack {
-  constructor(version) {
+  constructor(version, provider) {
     this.version = version;
     this.base = `${ASSET_BASE}/${version}`;
     this._bs = new Map();      // blockstate json
@@ -237,17 +296,22 @@ export class AssetPack {
     this._tex = new Map();     // THREE.Texture
     this._desc = new Map();    // 解決済みディスクリプタ（state文字列 -> desc）
     this._loader = new THREE.TextureLoader();
+    this.provider = provider || urlProvider(this.base);
   }
 
-  async _json(path, cache, key) {
+  // メモリ上の client.jar から AssetPack を作る（ブラウザDL用）
+  static fromJar(jar, version) {
+    return new AssetPack(version, jarProvider(jar));
+  }
+
+  async _json(logicalPath, cache, key) {
     if (cache.has(key)) return cache.get(key);
-    let data = null;
-    try { const r = await fetch(path); if (r.ok) data = await r.json(); } catch {}
+    const data = await this.provider.json(logicalPath);
     cache.set(key, data);
     return data;
   }
-  _blockstate(name) { return this._json(`${this.base}/blockstates/${name}.json`, this._bs, name); }
-  _modelJson(name) { return this._json(`${this.base}/models/${name}.json`, this._model, name); } // name 例: block/oak_log
+  _blockstate(name) { return this._json(`blockstates/${name}`, this._bs, name); }
+  _modelJson(name) { return this._json(`models/${name}`, this._model, name); } // name 例: block/oak_log
 
   // モデル名を正規化: "minecraft:block/oak_log" -> "block/oak_log"
   _norm(m) { return m.replace(/^minecraft:/, ''); }
@@ -284,9 +348,11 @@ export class AssetPack {
     if (!texName) return null;
     return texName.startsWith('block/') ? texName.slice(6) : texName;
   }
-  // ファイルキー -> 画像URL。'/' を含むなら textures/ 直下、無ければ textures/block/。
-  _texUrl(file) {
-    return file.includes('/') ? `${this.base}/textures/${file}.png` : `${this.base}/textures/block/${file}.png`;
+  _applyTexParams(t) {
+    t.magFilter = THREE.NearestFilter;
+    t.minFilter = THREE.NearestFilter;
+    t.generateMipmaps = false;
+    t.colorSpace = THREE.SRGBColorSpace;
   }
 
   // blockstate から最初に一致する variant を選ぶ
@@ -325,37 +391,41 @@ export class AssetPack {
     return desc;
   }
 
-  async _build(base, props, appear) {
-    if (!appear) return null; // air
-    const colorDesc = { quads: null, opaque: appear.opacity >= 1 && !NON_OPAQUE.test(base), emissive: appear.emissive, opacity: appear.opacity, color: appear.color };
-    const bs = await this._blockstate(base);
-    const variant = this._pickVariant(bs, props);
-    if (!variant) return colorDesc;
-
-    let textures = {}, elements = null, atlas = null;
-    let xs = 0, ys = 0;
-    if (variant.model) {
-      const r = await this._resolveModel(variant.model);
-      textures = r.textures; elements = r.elements;
-      xs = ((variant.x || 0) / 90) | 0;
-      ys = ((variant.y || 0) / 90) | 0;
+  // multipart の when 条件がブロックの props に一致するか
+  // when: {prop:"v"|"a|b", ...}(AND) / {OR:[...]} / {AND:[...]}
+  _whenMatches(when, props) {
+    if (!when) return true;
+    if (when.OR) return when.OR.some(c => this._whenMatches(c, props));
+    if (when.AND) return when.AND.every(c => this._whenMatches(c, props));
+    for (const [k, val] of Object.entries(when)) {
+      if (!String(val).split('|').includes(String(props[k]))) return false;
     }
-    if (!elements || !elements.length) {
-      // ブロックエンティティ系（chest/bed/sign 等）は block model が無い → 合成モデルで近似
-      const syn = syntheticModel(base, props);
-      if (!syn) return colorDesc;
-      textures = syn.textures; elements = syn.elements; xs = 0; ys = syn.yRot || 0;
-      atlas = syn.atlas || null; // entity アトラス（UV を /16 でなく実寸で正規化）
+    return true;
+  }
+
+  // blockstate → 適用すべきモデルインスタンス列 [{model,x,y}]（multipart は一致パーツ全部）
+  _modelInstances(bs, props) {
+    if (!bs) return null;
+    if (bs.variants) {
+      const v = this._pickVariant(bs, props);
+      return v && v.model ? [{ model: v.model, x: v.x, y: v.y }] : null;
     }
+    if (bs.multipart) {
+      const out = [];
+      for (const part of bs.multipart) {
+        if (this._whenMatches(part.when, props)) {
+          let ap = part.apply;
+          if (Array.isArray(ap)) ap = ap[0]; // 重み付きは先頭を代表
+          if (ap && ap.model) out.push({ model: ap.model, x: ap.x, y: ap.y });
+        }
+      }
+      return out.length ? out : null;
+    }
+    return null;
+  }
 
-    // フルキューブ判定（カリング用）
-    const el0 = elements[0];
-    const isFullCube = elements.length === 1 && el0.from && el0.to &&
-      el0.from[0] === 0 && el0.from[1] === 0 && el0.from[2] === 0 &&
-      el0.to[0] === 16 && el0.to[1] === 16 && el0.to[2] === 16 &&
-      el0.faces && DIR_NAMES.every(d => el0.faces[d]);
-
-    const quads = [];
+  // 1モデル分の elements を quads へ展開（xs,ys は blockstate 回転ステップ）
+  _emitQuads(quads, elements, textures, atlas, xs, ys, emissive) {
     for (const el of elements) {
       const b = { x1: el.from[0], y1: el.from[1], z1: el.from[2], x2: el.to[0], y2: el.to[1], z2: el.to[2] };
       const erot = el.rotation || null;
@@ -365,16 +435,13 @@ export class AssetPack {
         const tex = this._texFile(this._resolveRef(textures, face.texture));
         const rect = face.uv || defaultUV(dir, b);
         const uv = atlas ? faceUVSize(rect, face.rotation, atlas[0], atlas[1]) : faceUV(rect, face.rotation);
-        // 頂点(ピクセル) → 要素回転 → blockstate回転 → 0..1
         const pos = FACE_VERTS[dir](b).map(p => {
           let q = applyElemRot(p, erot);
           q = stateRotPos(q, xs, ys);
           return [q[0] / 16, q[1] / 16, q[2] / 16];
         });
-        // 法線
         let nrm = applyElemRotVec(DIRS[dir], erot);
         nrm = rotX(nrm, xs); nrm = rotY(nrm, ys);
-        // cull 方向
         let cull = null;
         if (face.cullface) {
           let cv = DIRS[face.cullface] || DIRS[dir];
@@ -382,10 +449,50 @@ export class AssetPack {
           cv = rotX(cv, xs); cv = rotY(cv, ys);
           cull = snapDir(cv);
         }
-        // tintindex があればバイオーム着色（葉/草など）→ ブロック色を乗算
         const tint = face.tintindex !== undefined && face.tintindex >= 0;
-        quads.push({ pos, normal: nrm, uv, tex, cull, tint, shade: appear.emissive ? 1.0 : shadeForNormal(nrm) });
+        quads.push({ pos, normal: nrm, uv, tex, cull, tint, shade: emissive ? 1.0 : shadeForNormal(nrm) });
       }
+    }
+  }
+
+  async _build(base, props, appear) {
+    if (!appear) return null; // air
+    const colorDesc = { quads: null, opaque: appear.opacity >= 1 && !NON_OPAQUE.test(base), emissive: appear.emissive, opacity: appear.opacity, color: appear.color };
+    const bs = await this._blockstate(base);
+
+    // 適用モデル群を解決（multipart は一致パーツ全部・各々独立の x/y 回転を持つ）
+    const instances = this._modelInstances(bs, props);
+    const resolved = [];
+    if (instances) {
+      for (const inst of instances) {
+        const r = await this._resolveModel(inst.model);
+        if (r.elements && r.elements.length) {
+          resolved.push({ textures: r.textures, elements: r.elements, xs: ((inst.x || 0) / 90) | 0, ys: ((inst.y || 0) / 90) | 0 });
+        }
+      }
+    }
+    let atlas = null;
+    if (resolved.length === 0) {
+      // block model が無い → 合成モデル（chest/bed/sign 等）
+      const syn = syntheticModel(base, props);
+      if (!syn) return colorDesc;
+      resolved.push({ textures: syn.textures, elements: syn.elements, xs: 0, ys: syn.yRot || 0 });
+      atlas = syn.atlas || null;
+    }
+
+    // フルキューブ判定（単一インスタンス・単一フル要素のみ＝カリング対象）
+    let isFullCube = false;
+    if (resolved.length === 1 && resolved[0].elements.length === 1) {
+      const el0 = resolved[0].elements[0];
+      isFullCube = el0.from && el0.to &&
+        el0.from[0] === 0 && el0.from[1] === 0 && el0.from[2] === 0 &&
+        el0.to[0] === 16 && el0.to[1] === 16 && el0.to[2] === 16 &&
+        el0.faces && DIR_NAMES.every(d => el0.faces[d]);
+    }
+
+    const quads = [];
+    for (const inst of resolved) {
+      this._emitQuads(quads, inst.elements, inst.textures, atlas, inst.xs, inst.ys, appear.emissive);
     }
 
     const allTex = quads.every(q => q.tex);
@@ -397,25 +504,23 @@ export class AssetPack {
   async preload(file) {
     if (!file || this._tex.has(file)) return;
     try {
-      const t = await this._loader.loadAsync(this._texUrl(file));
-      t.magFilter = THREE.NearestFilter;
-      t.minFilter = THREE.NearestFilter;
-      t.generateMipmaps = false;
-      t.colorSpace = THREE.SRGBColorSpace;
+      const url = await this.provider.texURL(file);
+      if (!url) { this._tex.set(file, null); return; }
+      const t = await this._loader.loadAsync(url);
+      this._applyTexParams(t);
       this._tex.set(file, t);
     } catch {
       this._tex.set(file, null); // 欠落テクスチャ
     }
   }
-  // 取得（先読み済みキャッシュ前提。未読込なら遅延ロードにフォールバック）
+  // 取得（先読み済みキャッシュ前提。未読込なら同期URLで遅延ロードにフォールバック）
   texture(file) {
     if (!file) return null;
     if (this._tex.has(file)) return this._tex.get(file);
-    const t = this._loader.load(this._texUrl(file));
-    t.magFilter = THREE.NearestFilter;
-    t.minFilter = THREE.NearestFilter;
-    t.generateMipmaps = false;
-    t.colorSpace = THREE.SRGBColorSpace;
+    const url = this.provider.texURLSync(file);
+    if (!url) { this._tex.set(file, null); return null; }
+    const t = this._loader.load(url);
+    this._applyTexParams(t);
     this._tex.set(file, t);
     return t;
   }

@@ -2,6 +2,8 @@ import { loadSchem, rotate, saveSchem } from './schem.js';
 import { loadLitematic } from './litematic.js';
 import { Viewer, buildMesh } from './viewer.js';
 import { AssetPack, loadVersions } from './textures.js';
+import { fetchLatestClientJar } from './jar.js';
+import { BIOMES } from './colors.js';
 
 const canvas = document.getElementById('view');
 const viewer = new Viewer(canvas);
@@ -11,6 +13,8 @@ let rotation = 0;      // 0..3 (×90° CW)
 let current = null;    // 表示中の（回転後）schem
 let fileName = 'schematic';
 let pack = null;       // AssetPack（null = 色キューブ）
+let jarPack = null;    // ブラウザDLで取得した jar 由来の AssetPack
+let biome = 'plains';  // 葉/草/水の tint バイオーム
 
 const $ = (id) => document.getElementById(id);
 const info = $('info');
@@ -46,13 +50,30 @@ drawCompass();
 
 async function applyRotation(frame = false) {
   current = rotate(original, rotation);
-  viewer.setMesh(await buildMesh(current, pack), frame);
+  viewer.setMesh(await buildMesh(current, pack, biome), frame);
   const dirs = ['元の向き (0°)', '90° CW', '180°', '270° CW'];
   compass.textContent = dirs[rotation];
   const mode = pack ? `tex:${pack.version}` : '色キューブ';
   setStatus(`${fileName} — ${current.width}×${current.height}×${current.length} / パレット${current.palette.length}種 / 回転 ${rotation * 90}° / ${mode}`);
   // 回転中（0°以外）は保存ボタンに赤バッヂ
   $('save').classList.toggle('badge', rotation !== 0);
+}
+
+const dlBtn = $('dlTex');
+
+// バイオーム選択肢を構築（葉/草/水の色）
+const biomeSel = $('biome');
+if (biomeSel) {
+  for (const bm of BIOMES) {
+    const o = document.createElement('option');
+    o.value = bm.id; o.textContent = bm.label;
+    biomeSel.appendChild(o);
+  }
+  biomeSel.value = biome;
+  biomeSel.addEventListener('change', async () => {
+    biome = biomeSel.value;
+    if (original) await applyRotation(false);
+  });
 }
 
 // 表示モード選択肢（テクスチャは常に最新版のみ／色キューブ）。デフォルト=最新テクスチャ。
@@ -68,20 +89,56 @@ async function initVersions() {
     o.value = reg.latest; o.textContent = `テクスチャ（最新 ${reg.latest}）`;
     verSel.appendChild(o);
     verSel.value = reg.latest; pack = new AssetPack(reg.latest);
+    setTexturesAvailable(true); // ローカルに導入済み → DL不要
   } else {
-    // アセット未取得（例: GitHub Pages 公開版）→ 色キューブのみ
+    // アセット未取得（例: GitHub Pages 公開版）→ 色キューブのみ。DLボタンで取得可。
     const o = document.createElement('option');
-    o.value = ''; o.disabled = true; o.textContent = 'テクスチャ未取得（ローカルで取得）';
+    o.value = ''; o.disabled = true; o.textContent = 'テクスチャ未取得';
     verSel.appendChild(o);
     verSel.value = ''; pack = null;
+    setTexturesAvailable(false);
     const note = $('texNote');
     if (note) note.style.display = '';
   }
 }
 
+// テクスチャが利用可能なら DL ボタンを無効化（インストール済みチェック）
+function setTexturesAvailable(avail) {
+  if (!dlBtn) return;
+  dlBtn.disabled = avail;
+  dlBtn.textContent = avail ? '✓ テクスチャ導入済み' : '⬇ テクスチャDL';
+}
+
 verSel.addEventListener('change', async () => {
-  pack = verSel.value ? new AssetPack(verSel.value) : null;
+  if (!verSel.value) pack = null;
+  else pack = jarPack || new AssetPack(verSel.value);
   if (original) await applyRotation(false);
+});
+
+// テクスチャDL: Mojang 公式 CDN から最新 client.jar をブラウザ内で取得→展開
+dlBtn?.addEventListener('click', async () => {
+  if (dlBtn.disabled) return;
+  dlBtn.disabled = true;
+  try {
+    const { id, jar } = await fetchLatestClientJar((r, t) => {
+      setStatus(`テクスチャDL中… ${(r / 1e6).toFixed(1)} / ${(t / 1e6).toFixed(1)} MB`);
+    });
+    setStatus('テクスチャ展開中…');
+    jarPack = AssetPack.fromJar(jar, id);
+    pack = jarPack;
+    // ドロップダウンを「テクスチャ（DL id）」に差し替えて選択
+    verSel.innerHTML = '';
+    const oc = document.createElement('option'); oc.value = ''; oc.textContent = '色キューブ';
+    const ot = document.createElement('option'); ot.value = id; ot.textContent = `テクスチャ（DL ${id}）`;
+    verSel.append(oc, ot); verSel.value = id;
+    const note = $('texNote'); if (note) note.style.display = 'none';
+    setTexturesAvailable(true);
+    if (original) await applyRotation(false);
+    setStatus(`テクスチャ取得完了（${id}）`);
+  } catch (e) {
+    setStatus('テクスチャDL失敗: ' + e.message);
+    setTexturesAvailable(false);
+  }
 });
 
 async function load(arrayBuffer, name) {

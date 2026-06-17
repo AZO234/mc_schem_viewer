@@ -92,3 +92,39 @@ function guess(base) {
   if (base.includes('stone') || base.includes('brick')) return 0x808080;
   return FALLBACK;
 }
+
+// --- バイオーム別の tint 色（草/葉/水）。代表的なバイオームの近似値。 ---
+export const BIOMES = [
+  { id: 'plains', label: '平原', grass: 0x91bd59, foliage: 0x77ab2f, water: 0x3f76e4 },
+  { id: 'forest', label: '森林', grass: 0x79c05a, foliage: 0x59ae30, water: 0x3f76e4 },
+  { id: 'birch_forest', label: '白樺の森', grass: 0x88bb67, foliage: 0x6ba941, water: 0x3f76e4 },
+  { id: 'jungle', label: 'ジャングル', grass: 0x59c93c, foliage: 0x30bb0b, water: 0x3f76e4 },
+  { id: 'taiga', label: 'タイガ', grass: 0x86b783, foliage: 0x68a464, water: 0x3f76e4 },
+  { id: 'snowy_plains', label: '雪原', grass: 0x80b497, foliage: 0x60a17b, water: 0x3d57d6 },
+  { id: 'savanna', label: 'サバンナ', grass: 0xbfb755, foliage: 0xaea42a, water: 0x3f76e4 },
+  { id: 'desert', label: '砂漠', grass: 0xbfb755, foliage: 0xaea42a, water: 0x3f76e4 },
+  { id: 'badlands', label: '荒野', grass: 0x90814d, foliage: 0x9e814d, water: 0x3f76e4 },
+  { id: 'swamp', label: '湿地', grass: 0x6a7039, foliage: 0x6a7039, water: 0x617b64 },
+  { id: 'dark_forest', label: '暗い森', grass: 0x507a32, foliage: 0x59ae30, water: 0x3f76e4 },
+  { id: 'mushroom_fields', label: 'キノコ島', grass: 0x55c93f, foliage: 0x2bbb0f, water: 0x3f76e4 },
+  { id: 'cherry_grove', label: '桜の林', grass: 0xb6db61, foliage: 0xb6db61, water: 0x5db7ef },
+  { id: 'mangrove_swamp', label: 'マングローブ湿地', grass: 0x6a7039, foliage: 0x8db127, water: 0x3a7a6b },
+];
+
+// バイオーム非依存（固定色）の tint ブロック
+const FIXED_TINT = {
+  spruce_leaves: 0x619961, birch_leaves: 0x80a755, lily_pad: 0x208030,
+};
+
+// tint 対象ブロックの色を返す（非対象は null）。biomeId 未指定時は plains。
+export function biomeTint(stateString, biomeId) {
+  const base = stateString.replace(/^minecraft:/, '').split('[')[0];
+  if (base in FIXED_TINT) return FIXED_TINT[base];
+  const b = BIOMES.find(x => x.id === biomeId) || BIOMES[0];
+  if (base === 'water' || base === 'bubble_column') return b.water;
+  if (base.endsWith('_leaves') || base === 'vine') return b.foliage;
+  if (base === 'grass_block' || base === 'short_grass' || base === 'tall_grass'
+    || base === 'fern' || base === 'large_fern' || base === 'potted_fern'
+    || base === 'sugar_cane' || base.endsWith('_grass')) return b.grass;
+  return null;
+}

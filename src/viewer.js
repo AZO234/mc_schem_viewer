@@ -1,6 +1,50 @@
 // three.js による 3D 表示。面カリング + 面ごとの陰影焼き込み。
 import * as THREE from 'three';
-import { blockAppearance } from './colors.js';
+import { blockAppearance, biomeTint } from './colors.js';
+import { splitState } from './schem.js';
+
+// 染料色 → CSS（看板文字色）
+const SIGN_DYE = {
+  white: '#f9fffe', orange: '#f9801d', magenta: '#c74ebd', light_blue: '#3ab3da',
+  yellow: '#fed83d', lime: '#80c71f', pink: '#f38baa', gray: '#474f52',
+  light_gray: '#9d9d97', cyan: '#169c9c', purple: '#8932b8', blue: '#3c44aa',
+  brown: '#835432', green: '#5e7c16', red: '#b02e26', black: '#1d1d21',
+};
+
+// 看板テキスト（JSON text component or プレーン文字列）→ 表示文字列
+function signLineText(msg) {
+  if (typeof msg !== 'string') return '';
+  const s = msg.trim();
+  if (s && (s[0] === '{' || s[0] === '"' || s[0] === '[')) {
+    try {
+      const j = JSON.parse(s);
+      if (typeof j === 'string') return j;
+      if (j && typeof j === 'object') return (j.text || '') + (Array.isArray(j.extra) ? j.extra.map(e => e.text || '').join('') : '');
+    } catch {}
+  }
+  return msg;
+}
+
+// 看板文字のキャンバステクスチャ（透明背景＋中央寄せ4行）
+function signTexture(lines, color) {
+  const S = 128;
+  const cv = document.createElement('canvas'); cv.width = S; cv.height = S;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = SIGN_DYE[color] || '#1d1d21';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (let i = 0; i < 4; i++) {
+    const ln = lines[i]; if (!ln) continue;
+    let fs = 22;
+    ctx.font = `bold ${fs}px sans-serif`;
+    while (ctx.measureText(ln).width > S - 8 && fs > 8) { fs--; ctx.font = `bold ${fs}px sans-serif`; }
+    ctx.fillText(ln, S / 2, S * (i + 0.5) / 4);
+  }
+  const t = new THREE.CanvasTexture(cv);
+  t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearFilter;
+  t.generateMipmaps = false; t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
 
 // 6 面の定義: 法線方向と 4 頂点（単位立方体 0..1）、陰影倍率
 const FACES = [
@@ -29,8 +73,32 @@ function glowTexture() {
 }
 
 // pack(AssetPack) を渡すとテクスチャ表示。未指定/未解決ブロックは色キューブにフォールバック。
-export async function buildMesh(s, pack = null) {
+// biome: 葉/草/水の tint 色を決めるバイオームID（colors.js の BIOMES）。
+export async function buildMesh(s, pack = null, biome = 'plains') {
   const W = s.width, H = s.height, L = s.length;
+  // パレットごとのバイオーム tint 色（tint対象でなければ null）
+  const tintByPalette = s.palette.map(name => biomeTint(name, biome));
+
+  // 看板テキスト: ブロックエンティティから "x,y,z" -> {lines,color} を構築
+  const signText = new Map();
+  for (const be of (s.blockEntities || [])) {
+    const id = (be.Id && be.Id.value) || (be.id && be.id.value) || '';
+    if (!/sign/i.test(id)) continue;
+    const pos = be.Pos && be.Pos.value;
+    if (!pos) continue;
+    let lines = [], color = 'black';
+    const data = be.Data && be.Data.value;
+    const ft = data && data.front_text && data.front_text.value;
+    const msgs = ft && ft.messages && ft.messages.value && ft.messages.value.items;
+    if (msgs) {
+      lines = msgs.map(signLineText);
+      color = (ft.color && ft.color.value) || 'black';
+    } else {
+      lines = [1, 2, 3, 4].map(i => (be['Text' + i] ? signLineText(be['Text' + i].value) : ''));
+    }
+    if (lines.some(l => l)) signText.set(`${pos[0]},${pos[1]},${pos[2]}`, { lines, color });
+  }
+  const signs = []; // 描画対象 {x,y,z,name,lines,color}
 
   // パレットごとにディスクリプタを解決（テクスチャ or 色）
   const descByPalette = new Array(s.palette.length);
@@ -76,12 +144,20 @@ export async function buildMesh(s, pack = null) {
   for (let y = 0; y < H; y++) {
     for (let z = 0; z < L; z++) {
       for (let x = 0; x < W; x++) {
-        const d = descAt(x, y, z);
+        const pi = s.indices[idx(x, y, z)];
+        const d = descByPalette[pi];
         if (!d) continue;
         if (d.emissive) lights.push({ x, y, z, color: d.color });
-        const r = ((d.color >> 16) & 255) / 255;
-        const gg = ((d.color >> 8) & 255) / 255;
-        const b = (d.color & 255) / 255;
+        // 看板でテキストがあれば収集
+        if (/sign/.test(s.palette[pi] || '')) {
+          const st = signText.get(`${x},${y},${z}`);
+          if (st) signs.push({ x, y, z, name: s.palette[pi], lines: st.lines, color: st.color });
+        }
+        // tint対象はバイオーム色、それ以外はブロック色（色キューブ/乗算共通の基準色）
+        const tcol = (tintByPalette[pi] != null) ? tintByPalette[pi] : d.color;
+        const r = ((tcol >> 16) & 255) / 255;
+        const gg = ((tcol >> 8) & 255) / 255;
+        const b = (tcol & 255) / 255;
 
         if (d.quads) {
           // model elements 由来の実ジオメトリ
@@ -134,13 +210,15 @@ export async function buildMesh(s, pack = null) {
     geo.setIndex(g.index);
     let mat;
     if (g.tex) {
-      // 不透明面は alphaTest 無し（読込中でも透けない）。カットアウト面のみ alphaTest+両面。
+      // 不透明面は alphaTest 無し（読込中でも透けない）。カットアウト面のみ alphaTest。
+      // 巻き順は修正済みなので常に FrontSide（DoubleSide だとランタン等の内側裏面が透けて形が崩れる。
+      // 十字モデル＝花/草は model 側が両面を定義済みなので FrontSide で両面とも出る）。
       mat = new THREE.MeshBasicMaterial({
         map: pack.texture(g.tex),
         vertexColors: true,
         alphaTest: g.transparent ? 0.5 : 0,
         transparent: false,
-        side: g.transparent ? THREE.DoubleSide : THREE.FrontSide,
+        side: THREE.FrontSide,
       });
     } else {
       mat = new THREE.MeshBasicMaterial({
@@ -166,6 +244,36 @@ export async function buildMesh(s, pack = null) {
       sp.scale.set(1.8, 1.8, 1.8);
       root.add(sp);
     }
+  }
+  // 看板テキスト: 板の前面に薄い文字クアッドを world 空間で正しい向きに構築
+  const UPV = new THREE.Vector3(0, 1, 0);
+  for (const sg of signs) {
+    const { name, x, y, z, lines, color } = sg;
+    const { name: base, props } = splitState(name);
+    const isWall = base.endsWith('_wall_sign');
+    // 文字が向く方向 n（wall=facing / standing=rotation）
+    let n;
+    if (isWall) { const d = DELTA[props.facing] || DELTA.south; n = new THREE.Vector3(d[0], d[1], d[2]); }
+    else { const a = (Number(props.rotation) || 0) * Math.PI / 8; n = new THREE.Vector3(Math.sin(a), 0, Math.cos(a)); }
+    const right = new THREE.Vector3().crossVectors(UPV, n).normalize(); // 正面から見た右
+    const cy = isWall ? 8.5 : 11;                 // 文字中心の高さ(px)
+    const depth = isWall ? 7.6 : 1.4;             // 板前面までのオフセット(px)
+    const center = new THREE.Vector3(8, cy, 8).addScaledVector(n, depth);
+    const hw = 6.5, hh = 3.4;                      // 文字面の半寸(px)
+    const corner = (sx, sy) => center.clone().addScaledVector(right, sx * hw).addScaledVector(UPV, sy * hh);
+    const cs = [corner(-1, 1), corner(1, 1), corner(1, -1), corner(-1, -1)]; // TL,TR,BR,BL
+    const posArr = [];
+    for (const c of cs) posArr.push(x + c.x / 16, y + c.y / 16, z + c.z / 16);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(posArr, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
+    geo.setIndex([0, 1, 2, 0, 2, 3]);
+    const tex = signTexture(lines, color);
+    tex.flipY = false; // canvas は上が v=0
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex, transparent: false, alphaTest: 0.4, side: THREE.DoubleSide, depthWrite: true,
+    });
+    root.add(new THREE.Mesh(geo, mat));
   }
   root.position.set(-W / 2, -H / 2, -L / 2);
   const pivot = new THREE.Group();

@@ -25,6 +25,7 @@
   button:hover, label.btn:hover { background: #4f82e8; }
   button.ghost { background: #444b57; }
   button.ghost:hover { background: #565e6c; }
+  button:disabled { opacity: .5; cursor: default; }
   #compass { font-weight: 600; font-size: 13px; padding: 4px 0; }
   #compassDial { flex: 0 0 auto; }
   #save { position: relative; }
@@ -63,11 +64,16 @@
     <div class="row">
       <label for="version" style="font-size:12px;align-self:center;">表示:</label>
       <select id="version" style="background:#444b57;color:#fff;border:0;border-radius:6px;padding:5px 8px;font-size:13px;"></select>
+      <button id="dlTex" class="ghost" title="Mojang公式から最新テクスチャをブラウザ内で取得（各自取得＝再配布なし）">⬇ テクスチャDL</button>
+    </div>
+    <div class="row">
+      <label for="biome" style="font-size:12px;align-self:center;">バイオーム:</label>
+      <select id="biome" title="葉・草・水の色" style="background:#444b57;color:#fff;border:0;border-radius:6px;padding:5px 8px;font-size:13px;"></select>
     </div>
     <div id="info">—</div>
     <div id="texNote" class="hint" style="display:none;color:#ffd27a;">
-      テクスチャ未取得のため色キューブ表示です。本物テクスチャは手元で
-      <code>node tools/fetch_assets.mjs</code> を実行すると有効になります（Mojang アセットは再配布不可のため同梱していません）。
+      色キューブ表示です。<b>⬇ テクスチャDL</b> で Mojang 公式から最新テクスチャをブラウザ内取得できます
+      （各自のブラウザが直接取得＝再配布なし）。ローカルなら <code>node tools/fetch_assets.mjs</code> でも可。
     </div>
     <div class="hint">
       WASD: 移動 (W等ダブルタップでダッシュ) / Space: 上昇 / Shift: 下降<br>
