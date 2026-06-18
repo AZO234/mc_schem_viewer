@@ -25,19 +25,21 @@ function signLineText(msg) {
   return msg;
 }
 
-// 看板文字のキャンバステクスチャ（透明背景＋中央寄せ4行）
-function signTexture(lines, color) {
-  const S = 128;
-  const cv = document.createElement('canvas'); cv.width = S; cv.height = S;
+// 看板文字のキャンバステクスチャ（透明背景＋中央寄せ4行）。
+// aspect=板面の横/縦比。キャンバスを同比率にして文字の横伸びを防ぐ。
+function signTexture(lines, color, aspect = 2.0) {
+  const H = 128, W = Math.round(H * aspect);
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
   ctx.fillStyle = SIGN_DYE[color] || '#1d1d21';
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const lineH = H / 4;
   for (let i = 0; i < 4; i++) {
     const ln = lines[i]; if (!ln) continue;
-    let fs = 22;
+    let fs = Math.round(lineH * 0.72);            // 1行=板高の1/4。MC風に小さめ
     ctx.font = `bold ${fs}px sans-serif`;
-    while (ctx.measureText(ln).width > S - 8 && fs > 8) { fs--; ctx.font = `bold ${fs}px sans-serif`; }
-    ctx.fillText(ln, S / 2, S * (i + 0.5) / 4);
+    while (ctx.measureText(ln).width > W - 8 && fs > 6) { fs--; ctx.font = `bold ${fs}px sans-serif`; }
+    ctx.fillText(ln, W / 2, lineH * (i + 0.5));
   }
   const t = new THREE.CanvasTexture(cv);
   t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearFilter;
@@ -198,6 +200,17 @@ export async function buildMesh(s, pack = null, biome = 'plains') {
     const files = new Set();
     for (const g of groups.values()) if (g.tex) files.add(g.tex);
     await Promise.all([...files].map(f => pack.preload(f)));
+    // アニメーションテクスチャ対策: lantern等は 16×48(縦3フレーム) のように縦長。
+    // UV は 16×16 前提でベイクされているため、縦長テクスチャは先頭フレームへ V を圧縮する。
+    // 各フレームは正方(幅=高さ)前提: factor = width/height（正方なら 1=無変換）。
+    for (const g of groups.values()) {
+      if (!g.tex || g.count === 0) continue;
+      const t = pack.texture(g.tex);
+      const im = t && t.image;
+      if (!im || !im.width || !im.height || im.height <= im.width) continue;
+      const factor = im.width / im.height;
+      for (let i = 1; i < g.uv.length; i += 2) g.uv[i] = 1 - (1 - g.uv[i]) * factor;
+    }
   }
 
   for (const g of groups.values()) {
@@ -257,9 +270,11 @@ export async function buildMesh(s, pack = null, biome = 'plains') {
     else { const a = (Number(props.rotation) || 0) * Math.PI / 8; n = new THREE.Vector3(Math.sin(a), 0, Math.cos(a)); }
     const right = new THREE.Vector3().crossVectors(UPV, n).normalize(); // 正面から見た右
     const cy = isWall ? 8.5 : 11;                 // 文字中心の高さ(px)
-    const depth = isWall ? 7.6 : 1.4;             // 板前面までのオフセット(px)
+    // n方向の板前面のすぐ手前に文字面を置く（浮き/めり込み防止）。
+    // wall: 板は壁側(n方向の手前)に寄り前面≒中心から-6.33px / standing: 前面≒中心から+0.67px
+    const depth = isWall ? -6.2 : 0.82;           // n方向の符号付きオフセット(px)
     const center = new THREE.Vector3(8, cy, 8).addScaledVector(n, depth);
-    const hw = 6.5, hh = 3.4;                      // 文字面の半寸(px)
+    const hw = 5.9, hh = 3.0;                      // 文字面の半寸(px)
     const corner = (sx, sy) => center.clone().addScaledVector(right, sx * hw).addScaledVector(UPV, sy * hh);
     const cs = [corner(-1, 1), corner(1, 1), corner(1, -1), corner(-1, -1)]; // TL,TR,BR,BL
     const posArr = [];
@@ -268,7 +283,7 @@ export async function buildMesh(s, pack = null, biome = 'plains') {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(posArr, 3));
     geo.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
     geo.setIndex([0, 1, 2, 0, 2, 3]);
-    const tex = signTexture(lines, color);
+    const tex = signTexture(lines, color, hw / hh);
     tex.flipY = false; // canvas は上が v=0
     const mat = new THREE.MeshBasicMaterial({
       map: tex, transparent: false, alphaTest: 0.4, side: THREE.DoubleSide, depthWrite: true,

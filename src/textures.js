@@ -139,6 +139,11 @@ function eboxFaces(x1, y1, z1, x2, y2, z2, ref, rects) {
   for (const d of DIR_NAMES) if (rects[d]) faces[d] = { texture: '#' + ref, uv: rects[d], rotation: rects[d][4] || 0 };
   return { from: [x1, y1, z1], to: [x2, y2, z2], faces };
 }
+// up 面の U を左右反転（box-UV の up は north と U 方向が逆のため、継ぎ目トリム補正用）
+function mirrorUpU(el) {
+  const u = el.faces && el.faces.up && el.faces.up.uv;
+  if (u) el.faces.up.uv = [u[2], u[1], u[0], u[3]];
+}
 // facing -> yRot ステップ数。rotY は時計回り [x,y,z]->[-z,y,x]。
 // 正面を north に作った形を facing 方向へ回す対応表（north=0,east=1,south=2,west=3）。
 const FACE_Y_NORTH = { north: 0, east: 1, south: 2, west: 3 };
@@ -160,24 +165,28 @@ function syntheticModel(base, props) {
     // 各半分（geometry＋テクスチャ＋錠）は内部整合のまま、割り当てる type だけ交換する。
     if (type === 'right') {
       // body x[0,15]（継ぎ目=-x方向）、錠は -x 端（継ぎ目側）
-      const t = `entity/chest/${kind}_left`;
+      // box-UV はテクスチャ左端→+x。normal_right は前面左端トリム→外側(+x=east)に出る。
+      // 継ぎ目側(west=-x)の内壁面は省略（相方と二重になり太い暗帯になるのを防ぐ）。
+      const t = `entity/chest/${kind}_right`;
+      const body = ebox(0, 0, 1, 15, 10, 15, 't', 0, 19); delete body.faces.west;
+      const lid = ebox(0, 9, 1, 15, 14, 15, 't', 0, 0); delete lid.faces.west;
+      mirrorUpU(lid);   // 上面はU方向が前面と逆。反転してトリムを外周へ
       return {
-        atlas: [64, 64], textures: { t }, yRot, elements: [
-          ebox(0, 0, 1, 15, 10, 15, 't', 0, 19),
-          ebox(0, 9, 1, 15, 14, 15, 't', 0, 0),
-          ebox(0, 6, 0, 1, 10, 1, 't', 0, 0),
-        ],
+        atlas: [64, 64], textures: { t }, yRot,
+        elements: [body, lid, ebox(0, 6, 0, 1, 10, 1, 't', 0, 0)],
       };
     }
     if (type === 'left') {
       // body x[1,16]（継ぎ目=+x方向）、錠は +x 端（継ぎ目側）
-      const t = `entity/chest/${kind}_right`;
+      // normal_left は前面縦トリム無し→継ぎ目(+x=east)が無地で繋がる。
+      // 継ぎ目側(east=+x)の内壁面は省略。
+      const t = `entity/chest/${kind}_left`;
+      const body = ebox(1, 0, 1, 16, 10, 15, 't', 0, 19); delete body.faces.east;
+      const lid = ebox(1, 9, 1, 16, 14, 15, 't', 0, 0); delete lid.faces.east;
+      mirrorUpU(lid);   // 上面はU方向が前面と逆。反転してトリムを外周へ
       return {
-        atlas: [64, 64], textures: { t }, yRot, elements: [
-          ebox(1, 0, 1, 16, 10, 15, 't', 0, 19),
-          ebox(1, 9, 1, 16, 14, 15, 't', 0, 0),
-          ebox(15, 6, 0, 16, 10, 1, 't', 0, 0),
-        ],
+        atlas: [64, 64], textures: { t }, yRot,
+        elements: [body, lid, ebox(15, 6, 0, 16, 10, 1, 't', 0, 0)],
       };
     }
     // 単一チェスト
