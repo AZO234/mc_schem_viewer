@@ -118,7 +118,7 @@ export async function loadLitematic(arrayBuffer) {
 
   return {
     width: W, height: H, length: L,
-    palette, indices, blockEntities: [],
+    palette, indices, blockEntities: [], entities: [],
     root: buildSpongeRoot(W, H, L, dataVersion),
   };
 }

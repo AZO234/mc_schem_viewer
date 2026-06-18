@@ -400,6 +400,30 @@ export class AssetPack {
     return desc;
   }
 
+  // アイテム id -> 額縁内表示用ディスクリプタ。
+  // { kind:'flat', tex } … item/generated 系のフラットスプライト（大半のアイテム）
+  // { kind:'block', quads } … item モデルが無いブロックアイテム→ブロックモデルを流用（縮小3D）
+  async describeItem(id) {
+    const base = (id || '').replace(/^minecraft:/, '');
+    if (!base) return null;
+    if (this._item && this._item.has(base)) return this._item.get(base);
+    if (!this._item) this._item = new Map();
+    let out = null;
+    // アイテムモデル item/<id>（無ければ block アイテム扱い）
+    const im = await this._modelJson('item/' + base);
+    if (im) {
+      const r = await this._resolveModel('item/' + base);
+      const lay = r.textures && (r.textures.layer0 || r.textures.layer1);
+      if (lay) out = { kind: 'flat', tex: this._texFile(this._norm(lay)) };
+    }
+    if (!out) {
+      const d = await this.describe('minecraft:' + base);
+      if (d && d.quads && d.quads.length) out = { kind: 'block', quads: d.quads };
+    }
+    this._item.set(base, out);
+    return out;
+  }
+
   // multipart の when 条件がブロックの props に一致するか
   // when: {prop:"v"|"a|b", ...}(AND) / {OR:[...]} / {AND:[...]}
   _whenMatches(when, props) {

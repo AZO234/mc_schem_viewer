@@ -11,6 +11,69 @@ const SIGN_DYE = {
   brown: '#835432', green: '#5e7c16', red: '#b02e26', black: '#1d1d21',
 };
 
+// 額縁等エンティティ用: 立方体中心(0.5)まわりに 90°×steps 回転した [pos, normal] を返す。
+// axis='y'(壁掛け) / 'x'(床・天井)。回転は [a,b]->[-b,a]。
+function rotPN(p, n, axis, steps) {
+  let px = p[0] - 0.5, py = p[1] - 0.5, pz = p[2] - 0.5;
+  let nx = n[0], ny = n[1], nz = n[2];
+  const k = ((steps % 4) + 4) % 4;
+  for (let i = 0; i < k; i++) {
+    if (axis === 'y') { [px, pz] = [-pz, px]; [nx, nz] = [-nz, nx]; }
+    else if (axis === 'x') { [py, pz] = [-pz, py]; [ny, nz] = [-nz, ny]; }
+  }
+  return [[px + 0.5, py + 0.5, pz + 0.5], [nx, ny, nz]];
+}
+// 平面内(0.5,0.5中心)で (x,y) を ang ラジアン回転
+function rotXY(x, y, ang) {
+  const c = Math.cos(ang), s = Math.sin(ang);
+  const dx = x - 0.5, dy = y - 0.5;
+  return [0.5 + dx * c - dy * s, 0.5 + dx * s + dy * c];
+}
+// 額縁内のフラットアイテム（item/generated）1枚のクアッド（既定北向き・前面=-z）。
+// ItemRotation(0-7, 45°刻み) で面内回転。両面見えるよう表裏2枚。
+function itemFlatQuads(itemRot) {
+  const fz = 15 / 16, hs = 4 / 16, ang = (itemRot || 0) * Math.PI / 4;
+  // 北面 normal -z の頂点順 (TR,TL,BL,BR)、uv は全面・上下反転
+  const base = [
+    [0.5 + hs, 0.5 + hs], [0.5 - hs, 0.5 + hs], [0.5 - hs, 0.5 - hs], [0.5 + hs, 0.5 - hs],
+  ].map(([x, y]) => rotXY(x, y, ang));
+  const uv = [[1, 1], [0, 1], [0, 0], [1, 0]];
+  const front = { pos: base.map(([x, y]) => [x, y, fz]), normal: [0, 0, -1], uv };
+  // 裏面（+z 側から見たとき用）。巻き対策で頂点反転＋uvも反転。
+  const backUv = [[0, 1], [1, 1], [1, 0], [0, 0]];
+  const back = { pos: [base[1], base[0], base[3], base[2]].map(([x, y]) => [x, y, fz - 0.01]), normal: [0, 0, 1], uv: backUv };
+  return [front, back];
+}
+// 額縁内のブロックアイテム: ブロックモデルのクアッドを中心へ縮小し前面側へ寄せ、面内回転。
+function itemBlockQuads(quads, itemRot) {
+  const sc = 0.45, ang = (itemRot || 0) * Math.PI / 4;
+  const cz = 14.5 / 16; // 中心の前後位置（前面寄り）
+  return quads.map(q => ({
+    tex: q.tex, shade: q.shade,
+    normal: q.normal,
+    pos: q.pos.map(p => {
+      // 中心(0.5)へ縮小 → 前面 cz へ平行移動 → 面内(z軸まわり)回転
+      let x = 0.5 + (p[0] - 0.5) * sc;
+      let y = 0.5 + (p[1] - 0.5) * sc;
+      let z = cz + (p[2] - 0.5) * sc;
+      [x, y] = rotXY(x, y, ang);
+      return [x, y, z];
+    }),
+    uv: q.uv,
+  }));
+}
+
+// item_frame entity facing(0-5: down,up,north,south,west,east) → モデル既定向き(前面=北/-z)
+// からの回転。壁掛けは y 回転、床/天井は x 回転。
+const FRAME_ROT = {
+  2: { axis: 'y', steps: 0 }, // north（既定）
+  5: { axis: 'y', steps: 1 }, // east
+  3: { axis: 'y', steps: 2 }, // south
+  4: { axis: 'y', steps: 3 }, // west
+  1: { axis: 'x', steps: 1 }, // up（天井）
+  0: { axis: 'x', steps: 3 }, // down（床）
+};
+
 // 看板テキスト（JSON text component or プレーン文字列）→ 表示文字列
 function signLineText(msg) {
   if (typeof msg !== 'string') return '';
@@ -171,7 +234,12 @@ export async function buildMesh(s, pack = null, biome = 'plains') {
             }
             let g, col;
             if (q.tex) {
-              g = groupFor('T|' + q.tex + '|' + (d.opaque ? 'o' : 't'), () => ({ tex: q.tex, transparent: !d.opaque }));
+              // tinted_glass / stained_glass はテクスチャ本体が半透明（暗いスモーク/色付き）。
+              // カットアウトでは消えてしまうので、本物のアルファブレンドで描画する。
+              const glassBlend = /tinted_glass|stained_glass/.test(s.palette[pi] || '');
+              g = glassBlend
+                ? groupFor('TB|' + q.tex, () => ({ tex: q.tex, blend: true }))
+                : groupFor('T|' + q.tex + '|' + (d.opaque ? 'o' : 't'), () => ({ tex: q.tex, transparent: !d.opaque }));
               // tint 面はブロック色を乗算（バイオーム着色の代用）、それ以外は白×陰影
               col = q.tint ? [r * q.shade, gg * q.shade, b * q.shade] : [q.shade, q.shade, q.shade];
             } else {
@@ -189,6 +257,49 @@ export async function buildMesh(s, pack = null, biome = 'plains') {
             const g = groupFor('C|' + d.color + '|' + d.opacity, () => ({ tex: null, color: d.color, opacity: d.opacity }));
             pushQuad(g, x, y, z, f.verts, f.dir, f.uv, [r * sh, gg * sh, b * sh]);
           }
+        }
+      }
+    }
+  }
+
+  // --- エンティティ（額縁など）。ブロックではないので Entities から描画 ---
+  if (pack) {
+    const frameCache = {};
+    for (const e of (s.entities || [])) {
+      const id = (e.id || '').replace(/^minecraft:/, '');
+      if (id !== 'item_frame' && id !== 'glow_item_frame') continue;
+      if (!e.pos) continue;
+      const facing = (typeof e.facing === 'number') ? e.facing
+        : ((e.data && e.data.facing && e.data.facing.value != null) ? e.data.facing.value : 2);
+      const rot = FRAME_ROT[facing] || FRAME_ROT[2];
+      // モデルを解決（キャッシュ）。glow は light 効果は省略しフレーム形状のみ。
+      const key = id;
+      if (!frameCache[key]) frameCache[key] = await pack.describe('minecraft:item_frame[map=false]');
+      const d = frameCache[key];
+      if (!d || !d.quads) continue;
+      // 設置セル（額縁は壁面の空きブロック側）。
+      const cx = Math.floor(e.pos[0]), cy = Math.floor(e.pos[1]), cz = Math.floor(e.pos[2]);
+      const emitRot = (q, col, tex, transparent) => {
+        const g = tex
+          ? groupFor('T|' + tex + '|' + (transparent ? 't' : 'o'), () => ({ tex, transparent }))
+          : groupFor('C|frame', () => ({ tex: null, color: 0x888888, opacity: 1 }));
+        const rp = q.pos.map(p => rotPN(p, q.normal, rot.axis, rot.steps)[0]);
+        const rn = rotPN(q.pos[0], q.normal, rot.axis, rot.steps)[1];
+        pushQuad(g, cx, cy, cz, rp, rn, q.uv, col, true);
+      };
+      for (const q of d.quads) {
+        emitRot(q, [q.shade, q.shade, q.shade], q.tex, true);
+      }
+      // 中身のアイテム
+      const itemTag = e.data && e.data.Item && (e.data.Item.value || e.data.Item);
+      const itemId = itemTag && itemTag.id && (itemTag.id.value || itemTag.id);
+      if (itemId) {
+        const irot = (e.data.ItemRotation && (e.data.ItemRotation.value ?? 0)) || 0;
+        const it = await pack.describeItem(itemId);
+        if (it && it.kind === 'flat' && it.tex) {
+          for (const q of itemFlatQuads(irot)) emitRot(q, [1, 1, 1], it.tex, true);
+        } else if (it && it.kind === 'block') {
+          for (const q of itemBlockQuads(it.quads, irot)) emitRot(q, [q.shade, q.shade, q.shade], q.tex, true);
         }
       }
     }
@@ -222,7 +333,17 @@ export async function buildMesh(s, pack = null, biome = 'plains') {
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(g.uv, 2));
     geo.setIndex(g.index);
     let mat;
-    if (g.tex) {
+    if (g.tex && g.blend) {
+      // tinted_glass / stained_glass: テクスチャのアルファをそのまま使って半透明ブレンド（スモーク）。
+      mat = new THREE.MeshBasicMaterial({
+        map: pack.texture(g.tex),
+        vertexColors: true,
+        transparent: true,
+        depthWrite: false,
+        alphaTest: 0.02,
+        side: THREE.FrontSide,
+      });
+    } else if (g.tex) {
       // 不透明面は alphaTest 無し（読込中でも透けない）。カットアウト面のみ alphaTest。
       // 巻き順は修正済みなので常に FrontSide（DoubleSide だとランタン等の内側裏面が透けて形が崩れる。
       // 十字モデル＝花/草は model 側が両面を定義済みなので FrontSide で両面とも出る）。

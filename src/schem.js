@@ -54,6 +54,30 @@ export function joinState(name, props) {
 const CW = { north: 'east', east: 'south', south: 'west', west: 'north' };
 function rotFacing(d) { return CW[d] || d; }
 
+// エンティティ(額縁/絵画)の向き 0-5(down,up,north,south,west,east) を確定する。
+// 額縁は Facing(大文字, 3D Direction byte 0-5) を使う（Rotation は [null,null] で空のことが多い）。
+// 絵画は facing(小文字)+Rotation(yaw,pitch) を使う。下記の優先順で確定。
+// MC yaw: 0=南(+z),90=西(-x),180=北(-z),270=東(+x) / pitch: -90=上,+90=下。
+export function entityFacing(data) {
+  if (!data) return 2;
+  // 1) 額縁の Facing(大文字, 3D Direction)
+  const F = data.Facing && data.Facing.value;
+  if (typeof F === 'number') return F;
+  // 2) 有効な Rotation[yaw,pitch]（絵画など）
+  const rt = data.Rotation && data.Rotation.value;
+  const items = rt && (rt.items || rt);
+  if (items && items.length >= 2 && items[0] != null && items[1] != null) {
+    const yaw = Number(items[0]), pitch = Number(items[1]);
+    if (pitch <= -45) return 1; // up
+    if (pitch >= 45) return 0;  // down
+    const y = ((Math.round(yaw / 90) % 4) + 4) % 4; // 0=南,1=西,2=北,3=東
+    return [3, 4, 2, 5][y];
+  }
+  // 3) facing(小文字) byte フォールバック
+  const f = data.facing && data.facing.value;
+  return (typeof f === 'number') ? f : 2;
+}
+
 // ブロック状態を 90°CW 回転（times 回適用）
 export function rotateBlockState(str, times) {
   let { name, props } = splitState(str);
@@ -100,11 +124,29 @@ export async function loadSchem(arrayBuffer) {
   let blockEntities = [];
   if (blocksC.BlockEntities) blockEntities = blocksC.BlockEntities.value.items;
 
+  // Entities (任意・額縁/絵画など)。Schematic 直下（Blocks と兄弟）。
+  // Pos は schem 原点基準の double 3要素。Data に facing/Item/Rotation 等。
+  let entities = [];
+  if (schc.Entities) {
+    entities = (schc.Entities.value.items || []).map(e => {
+      const pv = e.Pos && e.Pos.value;
+      const pos = pv ? (pv.items || pv) : null;
+      const data = (e.Data && e.Data.value) || {};
+      return {
+        id: (e.Id && e.Id.value) || (e.id && e.id.value) || '',
+        pos: pos ? [Number(pos[0]), Number(pos[1]), Number(pos[2])] : null,
+        data,
+        facing: entityFacing(data), // 0-5(down,up,north,south,west,east) を確定
+      };
+    });
+  }
+
   return {
     width, height, length,
     palette,
     indices,          // index = x + z*W + y*W*L
     blockEntities,
+    entities,         // [{id, pos:[x,y,z], data}]
     root,             // 元の構造（再保存時のメタ保持用）
   };
 }
@@ -163,11 +205,24 @@ function rotateOnce(s) {
     return beCopy;
   });
 
+  // Entities の位置と facing を 90°CW 回転（連続座標: nx=L-pz, nz=px）
+  const FACE_CW = { 2: 5, 5: 3, 3: 4, 4: 2 }; // north→east→south→west（down/up不変）
+  const newEnts = (s.entities || []).map(e => {
+    const cur = (e.facing != null) ? e.facing : (e.data && e.data.facing);
+    return {
+      id: e.id,
+      data: e.data,
+      pos: e.pos ? [L - e.pos[2], e.pos[1], e.pos[0]] : e.pos,
+      facing: (cur in FACE_CW) ? FACE_CW[cur] : cur, // 実効 facing（描画はこちらを優先）
+    };
+  });
+
   return {
     width: nW, height: nH, length: nL,
     palette: newPalette,
     indices: newIndices,
     blockEntities: newBE,
+    entities: newEnts,
     root: s.root,
   };
 }

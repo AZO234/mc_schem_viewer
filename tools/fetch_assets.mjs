@@ -57,6 +57,8 @@ async function main() {
     'assets/minecraft/textures/block/*',
     'assets/minecraft/models/block/*',
     'assets/minecraft/blockstates/*',
+    'assets/minecraft/textures/item/*',
+    'assets/minecraft/models/item/*',
     'assets/minecraft/textures/entity/chest/*',
     'assets/minecraft/textures/entity/bed/*',
     'assets/minecraft/textures/entity/signs/*',
@@ -81,7 +83,7 @@ async function main() {
 
   // 展開物を assets/<id>/ へ移動（textures/block, models/block, blockstates）
   const src = join(tmp, 'assets', 'minecraft');
-  for (const sub of [['textures', 'block'], ['textures', 'entity'], ['models', 'block'], ['blockstates']]) {
+  for (const sub of [['textures', 'block'], ['textures', 'item'], ['textures', 'entity'], ['models', 'block'], ['models', 'item'], ['blockstates']]) {
     const from = join(src, ...sub);
     const to = join(outDir, ...sub);
     if (existsSync(from)) {
