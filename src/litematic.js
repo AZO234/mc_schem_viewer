@@ -1,8 +1,8 @@
 // Litematica (.litematic) を読み込み、内部形式（schem.js の loadSchem と同じ）へ変換する。
 // 内部形式: { width,height,length, palette[name], indices[x+z*W+y*W*L], blockEntities[], root }
 // root には Sponge v3 互換構造を合成し、回転後の保存（saveSchem → .schem）も通るようにする。
-import { gunzip, parse, TAG } from './nbt.js';
-import { joinState } from './schem.js';
+import { gunzip, gzip, parse, write, TAG } from './nbt.js';
+import { joinState, splitState } from './schem.js';
 
 const vec3 = (c) => ({ x: c.x.value, y: c.y.value, z: c.z.value });
 
@@ -121,4 +121,112 @@ export async function loadLitematic(arrayBuffer) {
     palette, indices, blockEntities: [], entities: [],
     root: buildSpongeRoot(W, H, L, dataVersion),
   };
+}
+
+// makeBitReader の逆：index 配列を連続ビットパック long 配列へ。
+function packBits(indices, bits) {
+  const B = BigInt(bits);
+  const n = indices.length;
+  const numLongs = Math.max(1, Math.ceil((n * bits) / 64));
+  const mask = (1n << B) - 1n;
+  const u = (v) => BigInt.asUintN(64, v);
+  const acc = new Array(numLongs).fill(0n);
+  for (let i = 0; i < n; i++) {
+    const val = BigInt(indices[i] >>> 0) & mask;
+    const bitIndex = BigInt(i) * B;
+    const startLong = Number(bitIndex >> 6n);
+    const offset = bitIndex & 63n;
+    acc[startLong] = u(acc[startLong] | (val << offset));
+    if (offset + B > 64n && startLong + 1 < numLongs) {
+      acc[startLong + 1] = u(acc[startLong + 1] | (val >> (64n - offset)));
+    }
+  }
+  const out = new BigInt64Array(numLongs);
+  for (let i = 0; i < numLongs; i++) out[i] = BigInt.asIntN(64, acc[i]);
+  return out;
+}
+
+const isAirName = (p) => {
+  const b = p.replace(/^minecraft:/, '').replace(/\[.*$/, '');
+  return b === 'air' || b.endsWith('_air');
+};
+
+// 内部形式 → .litematic（gzip 済み Uint8Array）。単一リージョン。
+// ブロックは完全保存。BlockEntities は best-effort で TileEntities へ変換。
+// Entities（額縁・絵画等）は形式が異なるため未保存（schem 保存を使えば保持される）。
+export async function saveLitematic(s, name = 'Unnamed') {
+  const W = s.width, H = s.height, L = s.length;
+  const t = (type, value) => ({ type, value });
+  const vec = (x, y, z) => t(TAG.COMPOUND, { x: t(TAG.INT, x), y: t(TAG.INT, y), z: t(TAG.INT, z) });
+  const listC = (items) => t(TAG.LIST, { elementType: items.length ? TAG.COMPOUND : TAG.END, items });
+
+  // BlockStatePalette
+  const palItems = s.palette.map(state => {
+    const { name: bn, props } = splitState(state);
+    const c = { Name: t(TAG.STRING, bn) };
+    const keys = Object.keys(props || {});
+    if (keys.length) {
+      const p = {};
+      for (const k of keys) p[k] = t(TAG.STRING, String(props[k]));
+      c.Properties = t(TAG.COMPOUND, p);
+    }
+    return c;
+  });
+
+  // ブロック格納順は内部 idx (x + z*W + y*W*L) と litematic 同一
+  const longs = packBits(s.indices, bitsFor(s.palette.length));
+
+  const air = s.palette.map(isAirName);
+  let totalBlocks = 0;
+  for (const idx of s.indices) if (!air[idx]) totalBlocks++;
+
+  // BlockEntities → TileEntities（Pos→x,y,z / Data の各フィールド + id）
+  const tileEntities = [];
+  for (const be of (s.blockEntities || [])) {
+    const pos = be.Pos && be.Pos.value;
+    const data = (be.Data && be.Data.value) || {};
+    const te = {};
+    for (const k of Object.keys(data)) if (k !== 'x' && k !== 'y' && k !== 'z') te[k] = data[k];
+    if (!te.id) te.id = data.id || (be.Id ? t(TAG.STRING, be.Id.value) : t(TAG.STRING, ''));
+    te.x = t(TAG.INT, pos ? pos[0] : 0);
+    te.y = t(TAG.INT, pos ? pos[1] : 0);
+    te.z = t(TAG.INT, pos ? pos[2] : 0);
+    tileEntities.push(te);
+  }
+
+  const dv = (s.root && s.root.value && s.root.value.Schematic
+    && s.root.value.Schematic.value.DataVersion
+    && s.root.value.Schematic.value.DataVersion.value) || 0;
+  const now = BigInt((typeof Date !== 'undefined' && Date.now) ? Date.now() : 0);
+
+  const region = t(TAG.COMPOUND, {
+    Position: vec(0, 0, 0),
+    Size: vec(W, H, L),
+    BlockStatePalette: listC(palItems),
+    BlockStates: t(TAG.LONG_ARRAY, longs),
+    TileEntities: listC(tileEntities),
+    Entities: listC([]),
+    PendingBlockTicks: listC([]),
+    PendingFluidTicks: listC([]),
+  });
+
+  const root = {
+    name: '', type: TAG.COMPOUND, value: {
+      MinecraftDataVersion: t(TAG.INT, dv),
+      Version: t(TAG.INT, 6),
+      Metadata: t(TAG.COMPOUND, {
+        Name: t(TAG.STRING, name),
+        Author: t(TAG.STRING, ''),
+        Description: t(TAG.STRING, ''),
+        RegionCount: t(TAG.INT, 1),
+        TotalVolume: t(TAG.INT, W * H * L),
+        TotalBlocks: t(TAG.INT, totalBlocks),
+        TimeCreated: t(TAG.LONG, now),
+        TimeModified: t(TAG.LONG, now),
+        EnclosingSize: vec(W, H, L),
+      }),
+      Regions: t(TAG.COMPOUND, { [name]: region }),
+    },
+  };
+  return await gzip(write(root));
 }

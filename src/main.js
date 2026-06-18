@@ -1,5 +1,5 @@
 import { loadSchem, rotate, saveSchem } from './schem.js';
-import { loadLitematic } from './litematic.js';
+import { loadLitematic, saveLitematic } from './litematic.js';
 import { Viewer, buildMesh } from './viewer.js';
 import { AssetPack, loadVersions } from './textures.js';
 import { fetchLatestClientJar } from './jar.js';
@@ -163,12 +163,16 @@ $('file').addEventListener('change', async (e) => {
 
 $('save').addEventListener('click', async () => {
   if (!current) return;
+  const fmt = $('saveFmt') ? $('saveFmt').value : 'schem';
   setStatus('保存ファイル生成中…');
-  const bytes = await saveSchem(current);
+  const ext = fmt === 'litematic' ? 'litematic' : 'schem';
+  const bytes = fmt === 'litematic'
+    ? await saveLitematic(current, fileName)
+    : await saveSchem(current);
   const blob = new Blob([bytes], { type: 'application/octet-stream' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `${fileName}_rot${rotation * 90}.schem`;
+  a.download = `${fileName}_rot${rotation * 90}.${ext}`;
   a.click();
   URL.revokeObjectURL(a.href);
   setStatus(`保存しました: ${a.download}`);

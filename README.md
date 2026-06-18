@@ -1,119 +1,126 @@
 # mc schem viewer
 
-Minecraft の `.schem`（WorldEdit / Sponge Schematic v3）と `.litematic`（Litematica）を
-ブラウザで 3D 表示するビューア。建物全体を 90° 単位で回転し、回転後の `.schem` として再保存できる。
-（`.litematic` 読込時も保存は `.schem` 形式になる）
+*Languages: English | [日本語 (Japanese)](README_ja.md)*
 
-## 使い方
+A browser-based 3D viewer for Minecraft `.schem` (WorldEdit / Sponge Schematic v3) and
+`.litematic` (Litematica) files. It can rotate the whole build in 90° steps and re-export it
+as a `.schem` with the rotation baked in. (Even when loading a `.litematic`, the export is in
+`.schem` format.)
 
-ES モジュールと `fetch` を使うため、ローカル HTTP サーバ経由で開く（`file://` 直開きは不可）。
+## Usage
+
+Because it uses ES modules and `fetch`, open it through a local HTTP server (opening via
+`file://` directly will not work).
 
 ```bash
 cd mc_schem_viewer
 python3 -m http.server 8765
-# ブラウザで http://localhost:8765/ を開く
+# open http://localhost:8765/ in your browser
 ```
 
-- 起動時、同じフォルダの `planes_house.schem` を自動で読み込む
-- 別ファイル（`.schem` / `.litematic`）は **📂開く** か、ウィンドウへ **ドラッグ&ドロップ**
-- **💾回転を保存**: 現在の回転を反映した `<名前>_rot<角度>.schem` をダウンロード（回転中は赤バッヂ表示）
-- **表示**: 色キューブ / 最新テクスチャを切替（テクスチャは常に最新版のみ）
-- メニュー左上の**コンパス**は現在の視点（上＝視線方向）に追従して N/E/S/W を表示
-- トーチ等の発光ブロックはぼんやり光る（ソフトなハロー）
+- On startup it automatically loads `planes_house.schem` from the same folder.
+- To load another file (`.schem` / `.litematic`), use **📂 Open** or **drag & drop** it onto the window.
+- **💾 Save rotation**: downloads `<name>_rot<angle>.schem` with the current rotation applied (a red badge is shown while rotated).
+- **Display**: switch between color cubes / latest textures (textures are always the latest release only).
+- The **compass** at the top-left of the menu tracks the current view (up = look direction) and shows N/E/S/W.
+- Light-emitting blocks such as torches glow softly (a soft halo).
 
-## テクスチャの取得
+## Getting textures
 
-本物テクスチャ表示には MC のアセットが必要（再配布不可のためローカル取得）。
-`tools/fetch_assets.mjs` が公式アセットを取得して `assets/<latest>/` に展開する。
-**常に最新リリースのみを正規**とし、過去バージョンは取得・保持しない（取得時に旧版は自動削除）。
+Real textures require Minecraft's assets, which cannot be redistributed, so they are fetched
+locally. `tools/fetch_assets.mjs` downloads the official assets and extracts them into
+`assets/<latest>/`. **Only the latest release is treated as canonical**; past versions are not
+fetched or kept (older versions are deleted automatically on fetch).
 
 ```bash
-node tools/fetch_assets.mjs            # 最新リリースを取得
-node tools/fetch_assets.mjs --list     # 最新リリース/スナップショットを表示
+node tools/fetch_assets.mjs            # fetch the latest release
+node tools/fetch_assets.mjs --list     # show the latest release / snapshot
 ```
 
-- 取得元: Mojang の version manifest → client.jar → `textures/{block,entity/chest}` `models/block` `blockstates`
-- entity テクスチャ（chest 等のブロックエンティティ）も取得。bed/sign は新しめの MC では通常ブロックモデル化されている。
-- `assets/versions.json` に最新の id と DataVersion を記録（起動時に自動選択）。
-- アセット未取得時は自動で **色キューブ表示** にフォールバックする。
-- **⬇ テクスチャDL ボタン**：Mojang 公式 CDN から最新 `client.jar` を**ブラウザ内で取得**し、
-  ZIP を自前展開（`DecompressionStream`）してテクスチャを反映する。各ユーザーのブラウザが直接取得するため
-  再配布に当たらず、GitHub Pages 公開版でも本物テクスチャを見られる。テクスチャ導入済みのときボタンは無効化される。
+- Source: Mojang's version manifest → client.jar → `textures/{block,entity/chest}`, `models/block`, `blockstates`.
+- Entity textures (block entities such as chests) are also fetched. In recent Minecraft versions, beds/signs are usually turned into regular block models.
+- `assets/versions.json` records the latest id and DataVersion (auto-selected on startup).
+- When assets are not available, it automatically falls back to **color-cube display**.
+- **⬇ Texture DL button**: fetches the latest `client.jar` from Mojang's official CDN **inside the browser**,
+  unpacks the ZIP itself (`DecompressionStream`), and applies the textures. Because each user's browser
+  fetches it directly, it does not constitute redistribution, so even the GitHub Pages build can show real
+  textures. The button is disabled when textures are already installed.
 
-## GitHub Pages で公開
+## Publishing on GitHub Pages
 
-静的サイト（ビルド不要・相対パス）なのでそのまま公開できる。
-**ただし Mojang アセットは再配布不可**のため `assets/` はリポジトリに含めない（`.gitignore` 済み）。
-公開サイトは **色キューブ表示**になり、本物テクスチャは各自が手元で `fetch_assets.mjs` を実行して見る。
+It is a static site (no build step, relative paths), so it can be published as-is.
+**However, Mojang assets cannot be redistributed**, so `assets/` is not included in the repository
+(it is already in `.gitignore`). The published site shows **color cubes**, and each user runs
+`fetch_assets.mjs` locally to see real textures.
 
 ```bash
 git init && git add . && git commit -m "mc schem viewer"
 git branch -M main
 git remote add origin https://github.com/<user>/<repo>.git
 git push -u origin main
-# GitHub の Settings → Pages → Source: GitHub Actions を選択
+# On GitHub: Settings → Pages → Source: select "GitHub Actions"
 ```
 
-- CI: `.github/workflows/pages.yml` が push 時に**構文チェック→Pages 自動デプロイ**を実行（公式 `actions/*` のみ・権限最小・依存ゼロ）。
-- より厳格なサプライチェーン対策が必要なら、ワークフロー内の `@v4` 等を full commit SHA に固定する。
-- `.nojekyll` 同梱（Pages の Jekyll 処理を無効化）。
-- 公開時はパネルに「テクスチャ未取得＝色キューブ」の旨を表示する。
-- `planes_house.schem` はデモとして同梱。公開したくない場合は削除し、起動時はドラッグ&ドロップで読み込む。
+- CI: `.github/workflows/pages.yml` runs **syntax check → automatic Pages deploy** on push (official `actions/*` only, minimal permissions, zero dependencies).
+- If you need stricter supply-chain hardening, pin `@v4` etc. in the workflow to full commit SHAs.
+- `.nojekyll` is included (disables Pages' Jekyll processing).
+- When published, the panel shows a note that textures are not fetched (= color cubes).
+- `planes_house.schem` is bundled as a demo. If you do not want to publish it, delete it and load files via drag & drop on startup.
 
-### 操作
+### Controls
 
-| 操作 | 効果 |
+| Action | Effect |
 |---|---|
-| 左90° / 右90° / 0° | 建物全体を回転（ドア・階段・フェンス等の向きも追従）。0° は視点リセット |
-| ↻ 再描画 | 現在のメッシュを再構築（視点は維持） |
-| WASD | 視点基準で水平移動（マイクラ・クリエ風フライト） |
-| W/A/S/D ダブルタップ | ダッシュ（移動キーを離すと解除） |
-| Space / Shift | 上昇 / 下降 |
-| 左ドラッグ | その場で視点回転（FPS マウスルック） |
-| ホイール回転 | 視線方向へ前後ドリー（ズーム相当） |
-| 中ボタン(ホイールプッシュ)・右ドラッグ | 平行移動（CAD 風パン） |
+| Left 90° / Right 90° / 0° | Rotate the whole build (doors, stairs, fences, etc. orient with it). 0° also resets the view. |
+| ↻ Redraw | Rebuild the current mesh (view is kept). |
+| WASD | Move horizontally relative to the view (Minecraft creative-flight style). |
+| W/A/S/D double-tap | Dash (released when you let go of the movement key). |
+| Space / Shift | Ascend / descend. |
+| Left drag | Rotate the view in place (FPS mouse-look). |
+| Mouse wheel | Dolly forward/backward along the look direction (zoom-like). |
+| Middle button (wheel push) / right drag | Pan (CAD-style). |
 
-## 構成
+## Structure
 
-| ファイル | 役割 |
+| File | Role |
 |---|---|
-| `index.html` | UI とレイアウト（importmap で three を解決） |
-| `src/nbt.js` | NBT 読み書き＋gzip（ブラウザ標準 `DecompressionStream`/`CompressionStream`） |
-| `src/schem.js` | schem の解釈・varint デコード・90°回転・再シリアライズ |
-| `src/litematic.js` | Litematica (.litematic) の解釈（パレット＋ビットパック long 配列展開・複数リージョン統合）。内部形式へ変換 |
-| `src/jar.js` | Mojang 公式 client.jar のブラウザ内取得＋ZIP 自前展開（テクスチャDLボタン用・依存ゼロ） |
-| `src/colors.js` | ブロック→代表色（テクスチャ未解決時のフォールバック） |
-| `src/textures.js` | blockstate/model 解決＋テクスチャロード（AssetPack） |
-| `src/viewer.js` | three.js 描画（面カリング＋陰影＋テクスチャ）／カメラ操作 |
-| `src/main.js` | 読み込み/回転/保存/バージョン切替の UI 制御 |
-| `tools/fetch_assets.mjs` | 公式アセット取得スクリプト（バージョン選択） |
-| `vendor/` | three.js r160（MIT, ベンダリング済み・外部依存なし） |
-| `assets/<ver>/` | 取得した MC テクスチャ等（生成物・再配布不可） |
+| `index.html` | UI and layout (resolves three via importmap). |
+| `src/nbt.js` | NBT read/write + gzip (browser-native `DecompressionStream`/`CompressionStream`). |
+| `src/schem.js` | schem parsing, varint decoding, 90° rotation, re-serialization. |
+| `src/litematic.js` | Litematica (.litematic) parsing (palette + bit-packed long array expansion, multi-region merge). Converts to the internal format. |
+| `src/jar.js` | In-browser fetch of Mojang's official client.jar + self-contained ZIP extraction (for the texture DL button, zero dependencies). |
+| `src/colors.js` | Block → representative color (fallback when textures are unresolved). |
+| `src/textures.js` | blockstate/model resolution + texture loading (AssetPack). |
+| `src/viewer.js` | three.js rendering (face culling + shading + textures) / camera controls. |
+| `src/main.js` | UI control for loading / rotation / saving / version switching. |
+| `tools/fetch_assets.mjs` | Official asset fetch script (version selection). |
+| `vendor/` | three.js r160 (MIT, vendored, no external dependencies). |
+| `assets/<ver>/` | Fetched MC textures etc. (generated artifacts, not redistributable). |
 
-## 設計メモ
+## Design notes
 
-- **回転**: 構造を上から見て時計回りに 90°（北→東→南→西）。位置 `(x,z) → (L-1-z, x)`、
-  ブロック状態の `facing` / `axis` / `north..west`（フェンス・壁の接続）も同時に回す。
-  `chest` の `type`(left/right) や `stairs` の `shape`、`door` の `hinge` は facing 相対のため不変。
-- **依存ゼロ運用**: npm パッケージ・ビルド工程なし。three.js は固定版をベンダリング。
-- 検証: NBT 往復一致 / 4回転で元に戻る / 寸法入替 / facing 回転 / 位置対応 を確認済み。
+- **Rotation**: 90° clockwise viewed from above (north → east → south → west). Position `(x,z) → (L-1-z, x)`,
+  and block-state `facing` / `axis` / `north..west` (fence/wall connections) are rotated at the same time.
+  A `chest`'s `type` (left/right), a `stairs`' `shape`, and a `door`'s `hinge` are facing-relative, so they stay unchanged.
+- **Zero-dependency operation**: no npm packages, no build step. three.js is vendored at a fixed version.
+- Verified: NBT round-trip equality / returning to the original after 4 rotations / dimension swap / facing rotation / position mapping.
 
-## Phase2: 本物テクスチャ＋実形状ジオメトリ（実装済み）
+## Phase 2: Real textures + actual-shape geometry (implemented)
 
-- `blockstate` → variant（props 一致／回転 x,y）→ `model` 親チェーン → `#ref` 解決。新形式 `{sprite}` も解釈。
-- **block model の `elements`（`from`/`to` の箱）を実ジオメトリとして生成**：階段＝段差、スラブ＝薄板、
-  フェンス＝細い支柱、ガラス窓＝薄板、ドア＝薄板。面ごとの `uv`・テクスチャ回転・要素の `rotation`・
-  blockstate の `x`/`y` 回転をすべて適用（中心 8,8,8 まわり）。
-- ブロックエンティティ（chest/bed/sign 等）は block model が無いため、`syntheticModel()` で
-  既存 block テクスチャを流用した簡易シェイプで近似（chest=オーク箱／bed=低い羊毛ブロック／sign=薄板）。
-  furnace・crafting_table・anvil 等は通常モデルなのでそのままテクスチャ表示。
-- それ以外の未解決ブロックは `src/colors.js` の色キューブにフォールバック。
-- 描画は `MeshBasicMaterial` + `map`（`NearestFilter`・mipmap 無し）でドット感維持。
-  カットアウトは `alphaTest=0.5`、半透明面は `DoubleSide`。陰影は法線から算出し `vertexColors` に焼き込み。
-- 面カリングは各クアッドの `cullface` 方向の隣が不透明ブロックなら省略。
+- `blockstate` → variant (props match / rotation x,y) → `model` parent chain → `#ref` resolution. The new `{sprite}` form is also interpreted.
+- **Block model `elements` (the `from`/`to` boxes) are generated as actual geometry**: stairs = steps, slabs = thin plates,
+  fences = thin posts, glass panes = thin plates, doors = thin plates. Per-face `uv` / texture rotation / element `rotation` /
+  blockstate `x`/`y` rotation are all applied (around the center 8,8,8).
+- Block entities (chest/bed/sign, etc.) have no block model, so `syntheticModel()` approximates them with simple shapes
+  reusing existing block textures (chest = oak box / bed = low wool block / sign = thin plate).
+  furnace, crafting_table, anvil, etc. use normal models, so they are shown with textures as-is.
+- Any other unresolved block falls back to the color cube in `src/colors.js`.
+- Rendering uses `MeshBasicMaterial` + `map` (`NearestFilter`, no mipmaps) to keep the pixelated look.
+  Cutouts use `alphaTest=0.5`, translucent faces use `DoubleSide`. Shading is computed from normals and baked into `vertexColors`.
+- Face culling skips a quad when the neighbor in its `cullface` direction is an opaque block.
 
-## Phase3（予定）: ライティング
+## Phase 3 (planned): Lighting
 
-- `MeshBasicMaterial` → `MeshLambert`/`MeshStandard`、太陽（directional）＋環境光/hemisphere。
-- ボクセル角の**ベイク AO** で奥行き（焼き込み陰影はこの段で実ライトへ置換）。
-- 発光ブロック（torch 等）は emissive または点光源。
+- `MeshBasicMaterial` → `MeshLambert`/`MeshStandard`, sun (directional) + ambient/hemisphere light.
+- **Baked AO** at voxel corners for depth (the baked shading will be replaced by real lights at this stage).
+- Light-emitting blocks (torches, etc.) as emissive or point lights.
